@@ -1,3 +1,16 @@
+// Dotenv
+require('dotenv').config()
+
+// node-persist
+const storage = require('node-persist');
+storage.init()
+
+// Twilio
+const twilio = require('twilio')();
+
+// Settings
+const UPDATE_FREQUENCY = 10 // Every 10 games, send an upate
+
 function info() {
     console.log("INFO")
     const response = {
@@ -14,8 +27,63 @@ function start(gameState) {
     console.log(`${gameState.game.id} START`)
 }
 
-function end(gameState) {
+async function end(gameState) {
     console.log(`${gameState.game.id} END\n`)
+    // Parse the results
+    let winnerName = false
+    let won = false
+    if (gameState.board.snakes.length !== 0) {
+        const winningSnake = gameState.board.snakes[0]
+        winnerName = gameState.board.snakes[0].name
+        if (winningSnake.id === gameState.you.id) {
+            won = true
+        }
+    }
+    // Save the results to storage
+    let games = []
+    try {
+        games = await storage.getItem('games')
+    } catch (err) {
+        console.error('failed to load games')
+    }
+    games.push({
+        winnerName,
+        won
+    })
+    await storage.setItem('games', games)
+    // If we have enough results
+    if (games.length % UPDATE_FREQUENCY === 0) {
+        await sendSummary(games)
+    }
+}
+
+async function sendSummary(games) {
+    // Prepare a summary
+    const gamesWon = games.filter(g => g.won)
+    const gamesLost = games.filter(g => !g.won)
+    const winPercent = Math.floor(gamesWon.length / games.length * 100)
+    
+    // Prep the SMS
+    const from = process.env.FROM_NUMBER
+    const to = process.env.TO_NUMBER
+    // First, show the win rate
+    let body = `After ${games.length} games, you have ${gamesWon.length} wins for rate of ${winPercent}%`
+
+    // Next, find the people who defeated me the most
+    const winnersNames = gamesLost.map((game) => game.winnerName)
+    const rankedWinners = winnersNames.sort((a, b) => {
+        winnersNames.filter(w => w === a).length - winnersNames.filter(w => w === b).length
+    })
+    const highestWinner = rankedWinners[0]
+    const highestWinnerCount = rankedWinners.filter(w => w === highestWinner).length
+    body += `\nYou lost the most to ${highestWinner} (${highestWinnerCount} times)`
+
+    // Send the SMS
+    twilio.messages.create({
+        from,
+        to,
+        body
+    })
 }
 
 function move(gameState) {
